@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: mini-chatgpt-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chatgpt
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Mock LLM Service
+  mock-llm:
+    build:
+      context: ./mock-llm
+      dockerfile: Dockerfile
+    container_name: mini-chatgpt-mock-llm
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/complete"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mini-chatgpt-backend
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/chatgpt?schema=public
+
+      # LLM Configuration
+      LLM_PROVIDER: mock
+      MOCK_LLM_BASE_URL: http://mock-llm:8080
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3
+
+      # Timeout and retry configuration
+      LLM_TIMEOUT_MS: 12000
+      LLM_MAX_RETRIES: 2
+      LLM_RETRY_DELAY_MS: 1000
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mini-chatgpt-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://backend:3001
+
+  # Ollama (optional - uncomment to use real LLM)
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: mini-chatgpt-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   # Note: After starting, you need to pull a model:
+  #   # docker exec -it mini-chatgpt-ollama ollama pull llama3
+
+volumes:
+  postgres_data:
+  # ollama_data:
